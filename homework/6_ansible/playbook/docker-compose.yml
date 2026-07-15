@@ -1,0 +1,15 @@
+services:
+  ubuntu:
+    build: .
+    container_name: ubuntu
+    hostname: ubuntu
+
+  centos7:
+    build: .
+    container_name: centos7
+    hostname: centos7
+
+  fedora:
+    build: .
+    container_name: fedora
+    hostname: fedora
