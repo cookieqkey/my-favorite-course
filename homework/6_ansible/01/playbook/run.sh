@@ -2,19 +2,19 @@
 
 set -e
 
-echo "Starting containers..."
+echo "Запуск контейнеров"
 docker compose up -d
 
-echo "Waiting containers..."
+echo "Ожидание запуска"
 sleep 5
 
-echo "Running ansible..."
+echo "Запуск плейбука"
 ansible-playbook \
     -i inventory/prod.yml \
     site.yml \
     --ask-vault-pass
 
-echo "Stopping containers..."
+echo "Остановка контейнеров"
 docker compose down
 
 echo "Done"
