@@ -1,0 +1,9 @@
+data_dir = "/var/lib/vector"
+
+[sources.in]
+type = "stdin"
+
+[sinks.out]
+type = "console"
+inputs = ["in"]
+encoding.codec = "json"
