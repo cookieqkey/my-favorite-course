@@ -147,7 +147,7 @@
         repo: "{{ lighthouse_repo }}"
         dest: "{{ lighthouse_path }}"
         version: master
-        force: true
+        update: true
     - name: Set lighthouse directory permissions
       ansible.builtin.file:
         path: "{{ lighthouse_path }}"
