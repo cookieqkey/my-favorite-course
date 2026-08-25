@@ -16,6 +16,3 @@ ee699f99c612   elasticsearch:8.7.0      "/bin/tini -- /usr/l…"   5 minutes ago
 *скриншот интерфейса kibana;*
 
 ![alt text](images/image1.png)
-
-## Задача 2
-
