@@ -1,0 +1,23 @@
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: separated-multitool-pod
+spec:
+
+  initContainers:
+    - name: check-other-pods
+      image: wbitt/network-multitool:latest
+      command:
+        - /bin/sh
+        - -c
+        - |
+          until curl -fsS http://netology-web-service; do
+            echo "Waiting for service..."
+            sleep 5
+          done
+
+  containers:
+    - name: multitool
+      image: wbitt/network-multitool:latest
+      command: ['sleep', 'infinity']
