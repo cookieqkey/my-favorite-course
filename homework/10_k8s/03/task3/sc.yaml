@@ -1,0 +1,63 @@
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: data-exchange-sc
+provisioner: microk8s.io/hostpath
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  pvDir: /mnt/k8s-sc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-exchange-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: data-exchange-sc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-exchange
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-exchange
+  template:
+    metadata:
+      labels:
+        app: data-exchange
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while true; do
+                date >> /data/shared.txt
+                sleep 5
+              done
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+
+        - name: multitool
+          image: wbitt/network-multitool
+          command: ['sleep', 'infinity']
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: data-exchange-pvc
