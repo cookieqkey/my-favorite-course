@@ -1,0 +1,19 @@
+
+appName: web-app
+welcomeMessage: "Hi there, handsome!"
+
+nginx:
+  image:
+    repository: nginx
+    tag: "1.26"
+  replicaCount: 1
+  service:
+    port: 80
+
+multitool:
+  image:
+    repository: wbitt/network-multitool
+    tag: "latest"
+  replicaCount: 1
+  service:
+    port: 8080
