@@ -1,0 +1,371 @@
+---
+# ==========================================================
+# PLAY 1. Подготовка всех узлов Kubernetes
+# ==========================================================
+
+- name: Prepare Kubernetes nodes
+  hosts: k8s_cluster
+  become: true
+
+  tasks:
+
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg
+          - containerd
+        state: present
+
+    # ------------------------------------------------------
+    # Настройка модулей ядра
+    # ------------------------------------------------------
+
+    - name: Create modules-load configuration
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Load overlay module
+      ansible.builtin.command:
+        cmd: modprobe overlay
+      changed_when: false
+
+    - name: Load br_netfilter module
+      ansible.builtin.command:
+        cmd: modprobe br_netfilter
+      changed_when: false
+
+    # ------------------------------------------------------
+    # Настройка sysctl
+    # ------------------------------------------------------
+
+    - name: Configure Kubernetes sysctl parameters
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Apply sysctl settings
+      ansible.builtin.command:
+        cmd: sysctl --system
+      changed_when: false
+
+    # ------------------------------------------------------
+    # Отключение swap
+    # ------------------------------------------------------
+
+    - name: Disable swap immediately
+      ansible.builtin.command:
+        cmd: swapoff -a
+      changed_when: false
+
+    - name: Disable swap in fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^(\s*[^#]\S+\s+\S+\s+swap\s+.*)$'
+        replace: '# \1'
+
+    # ------------------------------------------------------
+    # Настройка containerd
+    # ------------------------------------------------------
+
+    - name: Generate default containerd configuration
+      ansible.builtin.command:
+        cmd: containerd config default
+      register: containerd_default_config
+      changed_when: false
+
+    - name: Create containerd configuration directory
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write containerd configuration
+      ansible.builtin.copy:
+        dest: /etc/containerd/config.toml
+        content: "{{ containerd_default_config.stdout }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart containerd
+
+    - name: Enable containerd service
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
+
+    # -------------------------------------------------------
+    # Установка crictl
+    # -------------------------------------------------------
+
+    - name: "CRICTL: Download archive"
+      ansible.builtin.get_url:
+        url: "{{ crictl_download_url }}"
+        dest: "/tmp/{{ crictl_archive }}"
+        mode: "0644"
+        force: false
+      when: not ansible_check_mode
+
+    - name: "CRICTL: Extract binary"
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ crictl_archive }}"
+        dest: /usr/local/bin/
+        remote_src: true
+        creates: /usr/local/bin/crictl
+      when: not ansible_check_mode
+
+    - name: "CRICTL: Set binary permissions"
+      ansible.builtin.file:
+        path: /usr/local/bin/crictl
+        owner: root
+        group: root
+        mode: "0755"
+      when: not ansible_check_mode
+
+    - name: "CRICTL: Configure containerd endpoint"
+      ansible.builtin.copy:
+        dest: /etc/crictl.yaml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false
+      when: not ansible_check_mode
+
+    - name: "CRICTL: Verify installation"
+      ansible.builtin.command:
+        cmd: crictl version
+      register: crictl_version_check
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: "CRICTL: Show installed version"
+      ansible.builtin.debug:
+        var: crictl_version_check.stdout_lines
+      when: not ansible_check_mode
+
+    # ------------------------------------------------------
+    # Установка репозитория Kubernetes
+    # ------------------------------------------------------
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download Kubernetes repository signing key
+      ansible.builtin.get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor_version }}/deb/Release.key
+        dest: /tmp/kubernetes-release.key
+        mode: "0644"
+
+    - name: Convert Kubernetes signing key
+      ansible.builtin.command:
+        cmd: >
+          gpg --dearmor --yes
+          -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          /tmp/kubernetes-release.key
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor_version }}/deb/ /"
+        filename: kubernetes
+        state: present
+
+    - name: Update apt cache for Kubernetes
+      ansible.builtin.apt:
+        update_cache: true
+
+    # ------------------------------------------------------
+    # Установка Kubernetes
+    # ------------------------------------------------------
+
+    - name: Install kubelet kubeadm kubectl
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Hold Kubernetes packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Enable kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+
+  handlers:
+
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        enabled: true
+
+
+
+# ==========================================================
+# PLAY 2. Инициализация Master
+# ==========================================================
+
+- name: Initialize Kubernetes control plane
+  hosts: kube_control_plane
+  become: true
+
+  tasks:
+
+    - name: Initialize Kubernetes cluster
+      ansible.builtin.command:
+        cmd: >
+          kubeadm init
+          --apiserver-advertise-address={{ kubernetes_master_ip }}
+          --apiserver-cert-extra-sans=127.0.0.1,localhost
+          --pod-network-cidr={{ pod_network_cidr }}
+          --service-cidr={{ service_network_cidr }}
+          --cri-socket={{ containerd_socket }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for ubuntu
+      ansible.builtin.file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
+
+    - name: Copy Kubernetes admin configuration
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: true
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+
+    - name: Install Calico CNI
+      ansible.builtin.command:
+        cmd: >
+          kubectl
+          --kubeconfig=/etc/kubernetes/admin.conf
+          apply
+          -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
+      register: calico_install
+      changed_when: >
+        'created' in calico_install.stdout or
+        'configured' in calico_install.stdout
+
+    - name: Wait for Kubernetes API
+      ansible.builtin.wait_for:
+        host: "{{ kubernetes_master_ip }}"
+        port: 6443
+        delay: 5
+        timeout: 180
+
+# ==========================================================
+# PLAY 3. Подключение Worker-нод
+# ==========================================================
+
+- name: Join workers to Kubernetes cluster
+  hosts: kube_node
+  become: true
+
+  tasks:
+
+    - name: Generate kubeadm join command on Master
+      ansible.builtin.command:
+        cmd: kubeadm token create --print-join-command
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
+      run_once: true
+      register: kubeadm_join
+      changed_when: false
+      no_log: true
+
+    - name: Check that kubeadm join command was generated
+      ansible.builtin.assert:
+        that:
+          - kubeadm_join is defined
+          - kubeadm_join.stdout is defined
+          - kubeadm_join.stdout | length > 0
+        fail_msg: "Failed to generate kubeadm join command on Master"
+
+    - name: Join worker to Kubernetes cluster
+      ansible.builtin.command:
+        cmd: >-
+          {{ kubeadm_join.stdout }}
+          --cri-socket={{ containerd_socket }}
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+      no_log: true
+
+# ==========================================================
+# PLAY 4. Проверка кластера
+# ==========================================================
+
+- name: Verify Kubernetes cluster
+  hosts: kube_control_plane
+  become: true
+
+  tasks:
+
+    - name: Get Kubernetes nodes
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide
+      register: kubernetes_nodes
+      changed_when: false
+
+    - name: Display Kubernetes nodes
+      ansible.builtin.debug:
+        var: kubernetes_nodes.stdout_lines
+
+    - name: Get Kubernetes system pods
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A
+      register: kubernetes_pods
+      changed_when: false
+
+    - name: Display Kubernetes pods
+      ansible.builtin.debug:
+        var: kubernetes_pods.stdout_lines

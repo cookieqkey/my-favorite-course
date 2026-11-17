@@ -1,0 +1,27 @@
+---
+# Версия Kubernetes.
+# Для установки используется репозиторий pkgs.k8s.io.
+kubernetes_minor_version: "1.37"
+
+# Версия Calico.
+calico_version: "v3.33.0"
+
+# Сетевые параметры Kubernetes.
+pod_network_cidr: "192.168.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+
+# CRI.
+containerd_socket: "unix:///run/containerd/containerd.sock"
+
+# crictl
+# Версия crictl должна соответствовать minor-версии Kubernetes
+crictl_version: "v1.37.0"
+crictl_archive: "crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+crictl_download_url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/{{ crictl_archive }}"
+
+# Master.
+kubernetes_master_ip: "10.0.1.11"
+
+# Системный пользователь.
+ansible_user: ubuntu
+
